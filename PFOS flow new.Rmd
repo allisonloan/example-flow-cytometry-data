@@ -1,0 +1,1124 @@
+#Load libraries
+```{r}
+library(readxl)
+library(tidyr)   # For data manipulation
+library(dplyr)   # For data manipulation
+library(ggsignif)
+library(ggplot2)
+library(broom) 
+library(rstatix)
+library(ggpubr)
+library(stringr)
+library(viridis)
+library(emmeans)
+library(purrr)
+library(car)
+library(extrafont)
+
+output_dir <- "../Dec 12 2024 (new) PFOS/plots_output/"
+dir.create(output_dir, showWarnings = FALSE)
+```
+
+#Load data
+```{r}
+data <- read.csv("../Dec 12 2024 (new) PFOS/20-Dec-2024.wsp FlowJo table.csv")
+colnames(data)
+# Initial data cleaning and renaming
+cleaned_data <- data %>%
+  mutate(
+    Sample = word(X, 1),
+    Group = word(X, 2),
+    Treatment = str_remove(X, ".*? .*? ") %>% # Remove the first two parts
+                str_remove("WLSM") %>%        # Remove "WLSM"
+                str_remove("\\.fcs") %>%      # Remove ".fcs"
+                str_trim()                    # Trim extra spaces
+  ) %>%
+ filter(Group %in% c("M1", "M2", "M3", "M4", "F1", "F2", "F3", "F4")) %>%
+  rename(
+    CD3 = cells.Single.Cells.live.CD3...Freq..of.Parent....,
+    CD3_fi = cells.Single.Cells.live.CD3.CFSE...Area.subset...Mean..CFSE...Area.,
+    CD4 = cells.Single.Cells.live.CD4...Freq..of.Parent....,
+    CD4_fi = cells.Single.Cells.live.CD4.CFSE...Area.subset...Mean..CFSE...Area.,
+    CD8 = cells.Single.Cells.live.CD8...Freq..of.Parent....,
+    CD8_fi = cells.Single.Cells.live.CD8.CFSE...Area.subset...Mean..CFSE...Area.,
+    CD19 = cells.Single.Cells.live.Remainder.CD19...Freq..of.Parent....,
+    CD19_fi = cells.Single.Cells.live.Remainder.CD19.CFSE...Area.subset...Mean..CFSE...Area.,
+    live = cells.Single.Cells.live...Freq..of.Parent....,
+    CD3_ud = cells.Single.Cells.live.CD3.CFSE...Area.subset.undivided...Freq..of.Parent....,
+    CD4_ud = cells.Single.Cells.live.CD4.CFSE...Area.subset.undivided...Freq..of.Parent....,
+    CD8_ud = cells.Single.Cells.live.CD8.CFSE...Area.subset.undivided...Freq..of.Parent....,
+    CD19_ud = cells.Single.Cells.live.Remainder.CD19.CFSE...Area.subset.undivided...Freq..of.Parent....
+  ) %>%
+  mutate(
+    Sex = ifelse(str_starts(Group, "M"), "Male", "Female"),
+    Smokers = ifelse(Group %in% c("M1", "M3", "M4", "F1"), "Smoker", "Non-Smoker")
+  ) %>%
+  # Remove all columns except the ones needed
+  select(Sample, Group, Treatment, Sex, Smokers, CD3, CD3_fi, CD4, CD4_fi, CD8, CD8_fi, CD19, CD19_fi, live, CD3_ud, CD4_ud, CD8_ud, CD19_ud)
+
+# Add treatment mapping
+cleaned_data <- cleaned_data %>%
+  mutate(
+    Treatment = str_trim(Treatment),  # Remove leading and trailing whitespace
+    Treatment = case_when(
+      str_detect(Treatment, "vehicle control \\+ LPS") ~ "LPS + Vehicle",
+      str_detect(Treatment, "PFOS \\+ LPS0.5uM") ~ "LPS + 0.5uM PFOS",
+      str_detect(Treatment, "PFOS \\+ LPS12.5uM") ~ "LPS + 12.5uM PFOS",
+      str_detect(Treatment, "PFOS \\+ LPS25uM") ~ "LPS + 25uM PFOS",
+      str_detect(Treatment, "PFOS \\+ LPS50uM") ~ "LPS + 50uM PFOS",
+      str_detect(Treatment, "PFOS \\+ LPS100uM") ~ "LPS + 100uM PFOS",
+      str_detect(Treatment, "vehicle control \\+ PHA") ~ "PHA + Vehicle",
+      str_detect(Treatment, "PFOS \\+ PHA0.5uM") ~ "PHA + 0.5uM PFOS",
+      str_detect(Treatment, "PFOS \\+ PHA12.5uM") ~ "PHA + 12.5uM PFOS",
+      str_detect(Treatment, "PFOS \\+ PHA25uM") ~ "PHA + 25uM PFOS",
+      str_detect(Treatment, "PFOS \\+ PHA50uM") ~ "PHA + 50uM PFOS",
+      str_detect(Treatment, "PFOS \\+ PHA100uM") ~ "PHA + 100uM PFOS",
+      TRUE ~ Treatment
+    )
+  )
+# Ensure factor levels for Treatment
+cleaned_data <- cleaned_data %>%
+  mutate(
+    Treatment = factor(Treatment, levels = c(
+      "LPS + Vehicle", "LPS + 0.5uM PFOS", "LPS + 12.5uM PFOS", 
+      "LPS + 25uM PFOS", "LPS + 50uM PFOS", "LPS + 100uM PFOS", "PHA + Vehicle",
+      "PHA + 0.5uM PFOS", "PHA + 12.5uM PFOS", "PHA + 25uM PFOS",
+      "PHA + 50uM PFOS", "PHA + 100uM PFOS"
+    ))
+  )
+
+cleaned_data <- cleaned_data %>%
+  mutate(
+    CD3 = as.numeric(gsub(",", ".", CD3)),
+    CD4 = as.numeric(gsub(",", ".", CD4)),
+    CD8 = as.numeric(gsub(",", ".", CD8)),
+    CD19 = as.numeric(gsub(",", ".", CD19)),
+    live = as.numeric(gsub(",", ".", live)),
+    CD3_ud = as.numeric(gsub(",", ".", CD3_ud)),
+    CD4_ud = as.numeric(gsub(",", ".", CD4_ud)),
+    CD8_ud = as.numeric(gsub(",", ".", CD8_ud)),
+    CD19_ud = as.numeric(gsub(",", ".", CD19_ud)),
+    CD19_fi = as.numeric(gsub(",", ".", CD19_fi)),
+     CD8_fi = as.numeric(gsub(",", ".", CD8_fi)),
+     CD4_fi = as.numeric(gsub(",", ".", CD4_fi)),
+     CD3_fi = as.numeric(gsub(",", ".", CD3_fi))
+  )
+
+ud_columns <- grep("_ud$", names(cleaned_data), value = TRUE) # Identify columns ending in "_ud"
+
+# Create new columns with "_divided" suffix
+for (col in ud_columns) {
+  new_col_name <- sub("_ud$", "_divided", col) # Replace "_ud" with "_divided"
+  cleaned_data[[new_col_name]] <- 100 - cleaned_data[[col]]        # Calculate the new column
+}
+
+cleaned_data <- replace(cleaned_data, is.na(cleaned_data), 0)
+# Filter data for LPS and PHA treatments
+data <- cleaned_data %>%
+  filter(str_detect(Treatment, "PHA|LPS"))
+
+normalize_by_vehicle <- function(df) {
+  # Specify the columns to normalize
+  numeric_columns <- c("CD3_fi", "CD4_fi", "CD8_fi")
+  
+  # Loop through each numeric column to normalize
+  for (col in numeric_columns) {
+    df <- df %>%
+      group_by(Group, Treatment_Type = ifelse(str_detect(Treatment, "LPS"), "LPS", "PHA")) %>%
+      mutate(
+        # Identify the vehicle value for the current column
+        vehicle_value = if_else(Treatment %in% c("LPS + Vehicle", "PHA + Vehicle"), .data[[col]], NA_real_)
+      ) %>%
+      # Fill missing vehicle values within the group and treatment type
+      mutate(vehicle_value = zoo::na.locf(vehicle_value, na.rm = FALSE),
+             vehicle_value = zoo::na.locf(vehicle_value, fromLast = TRUE)) %>%
+      # Normalize the column by the vehicle value
+      mutate(!!sym(col) := .data[[col]] / vehicle_value) %>%
+      ungroup()
+  }
+  
+  # Replace any remaining NA values in the normalized columns with 0
+  df <- df %>%
+    mutate(across(all_of(numeric_columns), ~replace_na(., 0)))
+  
+  return(df)
+}
+  
+normalized_data <- normalize_by_vehicle(data)
+# View the normalized data
+
+# Find columns that end with "_fi" and create new columns with reciprocal values
+transform_fi_columns <- function(normalized_data) {
+  # Get column names that end with "_fi"
+  fi_columns <- grep("_fi$", names(normalized_data), value = TRUE)
+  
+  # Loop through each "_fi" column
+  for (col in fi_columns) {
+    # Create a new column with the reciprocal
+    new_col_name <- paste0(col, "_reciprocal")
+    normalized_data[[new_col_name]] <- 1 / normalized_data[[col]]
+  }
+  
+  return(normalized_data)
+}
+
+# Transform the data frame
+normalized_data <- transform_fi_columns(normalized_data)
+
+print(normalized_data)
+
+# Create subsets for PHA and LPS data
+pha_data <- normalized_data %>%
+  filter(str_detect(Treatment, "PHA"))
+
+lps_data <- normalized_data %>%
+  filter(str_detect(Treatment, "LPS"))
+
+columns <- c("live", "CD3","CD4", "CD8", "CD19",
+              "CD3_fi", "CD4_fi", "CD8_fi", "CD19_fi",
+              "CD3_divided","CD4_divided","CD8_divided","CD19_divided","CD4_fi_reciprocal",
+             "CD3_fi_reciprocal", "CD8_fi_reciprocal", "CD19_fi_reciprocal" )
+
+
+create_datasets <- function(data, prefix) {
+  map(columns, ~ data %>%
+        select(Group, Treatment, Sex, Smokers, all_of(.x)) %>%
+        rename(Statistic = all_of(.x))) %>%
+    set_names(paste0(prefix, "_", columns))
+}
+
+# Create lists for PHA and LPS datasets
+pha_datasets <- create_datasets(pha_data, "PHA")
+lps_datasets <- create_datasets(lps_data, "LPS")
+
+```
+
+#Normalization and vairance testing
+```{r}
+datasets <- c(pha_datasets, lps_datasets)
+
+levene_results <- lapply(datasets, function(dataset) {
+  leveneTest(Statistic ~ Treatment, data = dataset)
+})
+
+# Print the results of Levene's test
+print(levene_results)
+
+shapiro_results <- lapply(datasets, function(dataset) {
+  shapiro.test(dataset$Statistic)
+})
+
+# not normal
+print(shapiro_results)
+
+lapply(datasets, function(dataset) {
+  qqnorm(dataset$Statistic)
+  qqline(dataset$Statistic)
+})
+```
+
+#Two-way ANOVA (sex/smoking)
+```{r}
+# Define a list of datasets to loop through
+datasets <- c(pha_datasets, lps_datasets)
+
+# Loop through each dataset
+for (dataset_name in names(datasets)) {
+  dataset <- datasets[[dataset_name]]
+  
+  # Ensure the dataset has the necessary structure for repeated measures ANOVA
+  # Convert Group to a factor if it's not already
+  dataset$Group <- as.factor(dataset$Group)
+  dataset$Sex <- as.factor(dataset$Sex)
+  dataset$Smokers <- as.factor(dataset$Smokers)
+  dataset$Treatment <- as.factor(dataset$Treatment)
+  
+  # Fit the repeated measures ANOVA model
+  model <- aov(Statistic ~ Sex * Smokers + Error(Group/Treatment), data = dataset)
+  
+  # Print the ANOVA results
+  print(paste("Repeated Measures ANOVA results for dataset:", dataset_name))
+  print(summary(model))
+}
+```
+
+#Bar plots combined data (One way ANOVA RM)
+```{r}
+# Define a list of datasets to loop through
+datasets <- c(pha_datasets, lps_datasets)
+
+# Custom function to calculate mean and upper standard error
+mean_se <- function(x) {
+  mean_x <- mean(x, na.rm = TRUE)
+  se_x <- sd(x, na.rm = TRUE) / sqrt(length(na.omit(x)))
+  data.frame(y = mean_x, ymin = mean_x - se_x, ymax = mean_x + se_x)  # ymin for lower SEM, ymax for upper SEM
+}
+# Loop through each dataset
+for (dataset_name in names(datasets)) {
+  dataset <- datasets[[dataset_name]]
+
+anova_model <- aov(Statistic ~ Treatment + Error(Group/Treatment), data = dataset)
+tukey_results <- emmeans(anova_model, pairwise ~ Treatment)  # Tukey's test for pairwise comparisons
+
+# View the ANOVA results
+print(paste("ANOVA results for dataset:", dataset_name))
+print(summary(anova_model))
+
+# Convert to a data frame
+pairwise_results <- as.data.frame(tukey_results$contrasts)
+
+# Add significance labels based on adjusted p-values
+pairwise_results <- pairwise_results %>%
+    mutate(
+      significance = case_when(
+        p.value < 0.001 ~ "***",  # Highly significant p-values
+        p.value < 0.01 ~ "**",    # Significant p-values
+        p.value < 0.05 ~ "*",     # Marginally significant p-values with stars
+        p.value < 0.099 ~ sub("(\\d+\\.\\d{2}).*", "\\1", as.character(p.value)),  # Truncate to 2 digits after the decimal
+        TRUE ~ "ns"               # Non-significant comparisons
+      )
+    )
+#all_pairwise_results[[dataset_name]] <- pairwise_results
+# Filter for comparisons involving "vehicle+LPS" (or adjust according to your dataset)
+max_y <- max(dataset$Statistic, na.rm = TRUE)  # Get the maximum y-ax
+increment <- max_y * 0.09  # Define an increment for each comparison
+
+pairwise_results <- pairwise_results %>%
+  separate(contrast, into = c("group1", "group2"), sep = " - ") %>%
+  mutate(
+    group1 = str_replace_all(group1, "[()]", ""),  # Remove parentheses from group1
+    group2 = str_replace_all(group2, "[()]", "")   # Remove parentheses from group2
+  )
+
+# Create significance labels for the plot
+significance_labels <- pairwise_results %>%
+  filter(group1 == "LPS + Vehicle" | group2 == "LPS + Vehicle" | 
+         group1 == "PHA + Vehicle" | group2 == "PHA + Vehicle") %>%
+  mutate(
+    max_y = max(dataset$Statistic, na.rm = TRUE),  # Max value for y-axis
+    increment = max_y * 0.09,  # Define increment
+    y.position = max_y + (row_number() - 1) * increment  # Stagger y positions
+  )
+# List of shapes for each level (8 shapes)
+shape_list <- c(15, 16, 17, 18, 19, 20, 21, 22)  # Manually specify shapes for 8 levels
+
+ # Set file path for the plot
+  plot_file <- paste0(output_dir, dataset_name, "one_way_anova_rm.png")
+  png(plot_file, width = 2200, height = 1600, res = 300)
+  
+# Create the plot
+p <- ggplot(dataset, aes(x = Treatment, y = Statistic, group = Treatment)) +
+  # Add individual data points for replicates
+  geom_jitter(
+    aes(color = Treatment, shape = factor(Group)),  # Map color to Treatment
+    size = 4, alpha = 1, position = position_jitterdodge(jitter.width = 0.8, dodge.width = 0.8)
+  ) +
+  # Add bars for the averages
+  stat_summary(
+    aes(fill = Treatment),  # Map fill to Treatment
+    fun = mean, geom = "bar", position = position_dodge(width = 0.9), alpha = 0.6, color = "black"
+  ) +
+  # Add error bars for the averages
+  stat_summary(
+    fun.data = mean_se, geom = "errorbar", position = position_dodge(width = 0.9), width = 0.2, color = "black"
+  ) +
+  labs(
+    title = paste(dataset_name),
+    x = NULL,
+    y = "% of cells",
+    color = "Treatment"   # Legend for point color
+  ) +
+  # Add pairwise significance annotations
+  stat_pvalue_manual(
+    significance_labels, 
+    label = "significance",  # Use the `significance` column for labels
+    tip.length = 0.02,       # Short brackets
+    bracket.nudge.y = 0.05, 
+    bracket.size = 0.8,
+    vjust = 0,
+     size = 6 
+  ) +
+  theme_minimal() +
+  theme(
+     text = element_text(family = "Arial", size = 16),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = NULL,
+    panel.grid.major = element_blank(),  # Remove major grid lines
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black")  # Add axis lines
+  ) +
+  scale_fill_viridis(option = "plasma", discrete = TRUE) +   # Use magma palette for bar fill
+  scale_color_viridis(option = "plasma", discrete = TRUE, alpha = 1)+
+    scale_shape_manual(values = shape_list)  # Apply manual shape mapping
+
+# Print the plot
+print(p)
+dev.off()
+
+#combined_pairwise_results <- bind_rows(all_pairwise_results, .id = "dataset_name")
+}
+#print(combined_pairwise_results)
+```
+
+#Heatmaps FI
+```{r}
+# Define a list of datasets to loop through
+datasets <- c(pha_datasets, lps_datasets)
+
+# Specify the objects to include in the heatmap
+selected_objects <- c("PHA_CD3_fi_reciprocal", "PHA_CD4_fi_reciprocal", "PHA_CD8_fi_reciprocal",  
+                      "LPS_CD3_fi_reciprocal", "LPS_CD4_fi_reciprocal", "LPS_CD8_fi_reciprocal")
+filtered_datasets <- datasets[names(datasets) %in% selected_objects]
+
+# Initialize an empty data frame for combined data
+combined_data <- data.frame()
+
+# Loop through the filtered datasets to process both LPS and PHA data
+for (dataset_name in names(filtered_datasets)) {
+  dataset <- filtered_datasets[[dataset_name]]
+  
+  # Calculate the mean across treatments
+  mean_data <- dataset %>%
+    group_by(Treatment) %>%
+    summarise(mean_stat = mean(Statistic), .groups = "drop")
+  
+  # Add columns to identify the dataset and group (LPS or PHA)
+  mean_data$Dataset <- dataset_name
+  mean_data$Group <- ifelse(grepl("^LPS", dataset_name), "LPS", "PHA")
+  
+  # Remove the "LPS +" or "PHA +" prefix from Treatment labels
+  mean_data$Treatment <- gsub("^(LPS|PHA) \\+ ", "", mean_data$Treatment)
+  
+  # Append to the combined data frame
+  combined_data <- rbind(combined_data, mean_data)
+}
+
+# Define the desired order for the y-axis
+treatment_order <- c("Vehicle", "0.5uM PFOS", "12.5uM PFOS", "25uM PFOS", "50uM PFOS", "100uM PFOS")
+
+# Convert the Treatment column to a factor with the specified order
+combined_data$Treatment <- factor(combined_data$Treatment, levels = treatment_order)
+
+# Set file path for the plot
+plot_file <- paste0(output_dir, "heatmap.png")
+png(plot_file, width = 2200, height = 1600, res = 300)
+
+# Create the heatmap for combined data
+combined_plot <- ggplot(combined_data, aes(x = Dataset, y = Treatment, fill = mean_stat)) +
+  geom_tile()  +
+  scale_fill_viridis(option = "plasma", direction = 1, limits = c(0.5, 1.5)) +
+  facet_wrap(~ Group, scales = "free_x") +
+  labs(
+    title = "Heatmap of Mean Expression Across LPS and PHA Datasets",
+    x = "Dataset",
+    y = "Treatment",
+    fill = "Mean Value"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "Arial", size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+
+# Print the plot
+print(combined_plot)
+dev.off()
+```
+
+#Bar plots split by sex data (Two way ANOVA RM)
+```{r}
+output_dir <- "../Dec 12 2024 (new) PFOS/plots_output/Two-way_ANOVAS/"
+dir.create(output_dir, showWarnings = FALSE)
+# Define a list of datasets to loop through
+datasets <- c(pha_datasets, lps_datasets)
+
+# Custom function to calculate mean and upper standard error
+mean_se <- function(x) {
+  mean_x <- mean(x, na.rm = TRUE)
+  se_x <- sd(x, na.rm = TRUE) / sqrt(length(na.omit(x)))
+  data.frame(y = mean_x, ymin = mean_x - se_x, ymax = mean_x + se_x)  # ymin for lower SEM, ymax for upper SEM
+}
+
+# List of shapes for each level (8 shapes)
+shape_list <- c(0, 1, 2, 3, 4, 5, 6, 7)  # Manually specify shapes for 8 levels
+
+# Loop through each dataset
+for (dataset_name in names(datasets)) {
+  dataset <- datasets[[dataset_name]]
+  
+  # Fit the two-way ANOVA model
+  
+anova_model <- aov(Statistic ~ Treatment * Sex + Error(Group/(Treatment * Sex)), data = dataset)
+
+  tukey_results <- emmeans(anova_model, pairwise ~ Treatment  | Sex)  # Tukey's test for pairwise comparisons
+  
+  # View the ANOVA results
+  print(paste("ANOVA results for dataset:", dataset_name))
+  print(summary(anova_model))
+  
+  # Convert to a data frame for Tukey's results
+  pairwise_results <- as.data.frame(tukey_results$contrasts)
+  
+  # Add significance labels based on adjusted p-values
+pairwise_results <- pairwise_results %>%
+    mutate(
+      significance = case_when(
+        p.value < 0.001 ~ "***",  # Highly significant p-values
+        p.value < 0.01 ~ "**",    # Significant p-values
+        p.value < 0.05 ~ "*",     # Marginally significant p-values with stars
+        p.value < 0.099 ~ sub("(\\d+\\.\\d{2}).*", "\\1", as.character(p.value)),  # Truncate to 2 digits after the decimal
+        TRUE ~ "ns"               # Non-significant comparisons
+      )
+    )
+  
+  # Filter for comparisons involving "vehicle+LPS" or "PHA+Vehicle" (adjust according to your dataset)
+  max_y <- max(dataset$Statistic, na.rm = TRUE)  # Get the maximum y-axis value
+  increment <- max_y * 0.09  # Define an increment for each comparison
+  
+  pairwise_results <- pairwise_results %>%
+    separate(contrast, into = c("group1", "group2"), sep = " - ") %>%
+    mutate(
+      group1 = str_replace_all(group1, "[()]", ""),  # Remove parentheses from group1
+      group2 = str_replace_all(group2, "[()]", "")   # Remove parentheses from group2
+    )
+  
+  # Create significance labels for the plot
+  significance_labels <- pairwise_results %>%
+    filter(group1 == "LPS + Vehicle" | group2 == "LPS + Vehicle" | 
+           group1 == "PHA + Vehicle" | group2 == "PHA + Vehicle") %>%
+    mutate(
+      max_y = max(dataset$Statistic, na.rm = TRUE),  # Max value for y-axis
+      increment = max_y * 0.09,  # Define increment
+      y.position = max_y + (row_number() - 1) * increment  # Stagger y positions
+    )
+  
+   # Set file path for the plot
+  plot_file <- paste0(output_dir, dataset_name, "two_way_anova_rm_sex.png")
+  png(plot_file, width = 2200, height = 1600, res = 300)
+
+  # Create the plot
+  p <- ggplot(dataset, aes(x = Treatment, y = Statistic, group = Treatment)) +
+    # Add facet wrap for each Division
+    facet_wrap(~ Sex, scales = "fixed") +
+    # Add individual data points for replicates
+    geom_jitter(
+      aes(color = Treatment, shape = factor(Group)),  # Map color to Treatment
+      size = 2, alpha = 1, position = position_jitterdodge(jitter.width = 0.8, dodge.width = 0.8)
+    ) +
+    # Add bars for the averages
+    stat_summary(
+      aes(fill = Treatment),  # Map fill to Treatment
+      fun = mean, geom = "bar", position = position_dodge(width = 0.9), alpha = 0.6, color = "black"
+    ) +
+    # Add error bars for the averages
+    stat_summary(
+      fun.data = mean_se, geom = "errorbar", position = position_dodge(width = 0.9), width = 0.2, color = "black"
+    ) +
+    labs(
+      title = paste(dataset_name),
+      x = NULL,
+      y = "% of cells",
+      color = "Treatment"   # Legend for point color
+    ) +
+    # Add pairwise significance annotations
+    stat_pvalue_manual(
+      significance_labels, 
+      label = "significance",  # Use the `significance` column for labels
+      tip.length = 0.02,       # Short brackets
+      bracket.size = 0.8,
+      vjust = 0
+    ) +
+    theme_minimal() +
+    theme(
+      text = element_text(family = "Arial", size = 12),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = NULL,
+      panel.grid.major = element_blank(),  # Remove major grid lines
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(color = "black")  # Add axis lines
+    ) +
+    scale_fill_viridis(option = "plasma", discrete = TRUE) +   # Use magma palette for bar fill
+    scale_color_viridis(option = "plasma", discrete = TRUE, alpha = 1) +
+    scale_shape_manual(values = shape_list)  # Apply manual shape mapping
+  
+  # Print the plot
+  print(p)
+dev.off()
+  # Store the pairwise results in the list
+ # all_pairwise_results[[dataset_name]] <- pairwise_results
+}
+
+# Combine all pairwise results into a single dataframe
+#combined_pairwise_results <- bind_rows(all_pairwise_results, .id = "dataset_name")
+
+# View the combined results
+#print(combined_pairwise_results)
+```
+
+#Bar plots split by smoking data (Two way ANOVA RM)
+```{r}
+output_dir <- "../Dec 12 2024 (new) PFOS/plots_output/Two-way_ANOVAS/"
+dir.create(output_dir, showWarnings = FALSE)
+# Define a list of datasets to loop through
+datasets <- c(pha_datasets, lps_datasets)
+# Custom function to calculate mean and upper standard error
+mean_se <- function(x) {
+  mean_x <- mean(x, na.rm = TRUE)
+  se_x <- sd(x, na.rm = TRUE) / sqrt(length(na.omit(x)))
+  data.frame(y = mean_x, ymin = mean_x - se_x, ymax = mean_x + se_x)  # ymin for lower SEM, ymax for upper SEM
+}
+
+# List of shapes for each level (8 shapes)
+shape_list <- c(0, 1, 2, 3, 4, 5, 6, 7)  # Manually specify shapes for 8 levels
+
+# Loop through each dataset
+for (dataset_name in names(datasets)) {
+  dataset <- datasets[[dataset_name]]
+  
+  # Fit the two-way ANOVA model
+anova_model <- aov(Statistic ~ Treatment * Smokers + Error(Group/(Treatment * Smokers)), data = dataset)
+  tukey_results <- emmeans(anova_model, pairwise ~ Treatment  | Smokers)  # Tukey's test for pairwise comparisons
+  
+  # View the ANOVA results
+  print(paste("ANOVA results for dataset:", dataset_name))
+  print(summary(anova_model))
+  
+  # Convert to a data frame for Tukey's results
+  pairwise_results <- as.data.frame(tukey_results$contrasts)
+  
+  # Add significance labels based on adjusted p-values
+pairwise_results <- pairwise_results %>%
+    mutate(
+      significance = case_when(
+        p.value < 0.001 ~ "***",  # Highly significant p-values
+        p.value < 0.01 ~ "**",    # Significant p-values
+        p.value < 0.05 ~ "*",     # Marginally significant p-values with stars
+        p.value < 0.099 ~ sub("(\\d+\\.\\d{2}).*", "\\1", as.character(p.value)),  # Truncate to 2 digits after the decimal
+        TRUE ~ "ns"               # Non-significant comparisons
+      )
+    )
+  
+  # Filter for comparisons involving "vehicle+LPS" or "PHA+Vehicle" (adjust according to your dataset)
+  max_y <- max(dataset$Statistic, na.rm = TRUE)  # Get the maximum y-axis value
+  increment <- max_y * 0.09  # Define an increment for each comparison
+  
+  pairwise_results <- pairwise_results %>%
+    separate(contrast, into = c("group1", "group2"), sep = " - ") %>%
+    mutate(
+      group1 = str_replace_all(group1, "[()]", ""),  # Remove parentheses from group1
+      group2 = str_replace_all(group2, "[()]", "")   # Remove parentheses from group2
+    )
+  
+  # Create significance labels for the plot
+  significance_labels <- pairwise_results %>%
+    filter(group1 == "LPS + Vehicle" | group2 == "LPS + Vehicle" | 
+           group1 == "PHA + Vehicle" | group2 == "PHA + Vehicle") %>%
+    mutate(
+      max_y = max(dataset$Statistic, na.rm = TRUE),  # Max value for y-axis
+      increment = max_y * 0.09,  # Define increment
+      y.position = max_y + (row_number() - 1) * increment  # Stagger y positions
+    )
+  
+     # Set file path for the plot
+  plot_file <- paste0(output_dir, dataset_name, "two_way_anova_rm_smoking.png")
+  png(plot_file, width = 2200, height = 1600, res = 300)
+  
+  # Create the plot
+  p <- ggplot(dataset, aes(x = Treatment, y = Statistic, group = Treatment)) +
+    # Add facet wrap for each Division
+    facet_wrap(~ Smokers, scales = "fixed") +
+    # Add individual data points for replicates
+    geom_jitter(
+      aes(color = Treatment, shape = factor(Group)),  # Map color to Treatment
+      size = 2, alpha = 1, position = position_jitterdodge(jitter.width = 0.8, dodge.width = 0.8)
+    ) +
+    # Add bars for the averages
+    stat_summary(
+      aes(fill = Treatment),  # Map fill to Treatment
+      fun = mean, geom = "bar", position = position_dodge(width = 0.9), alpha = 0.6, color = "black"
+    ) +
+    # Add error bars for the averages
+    stat_summary(
+      fun.data = mean_se, geom = "errorbar", position = position_dodge(width = 0.9), width = 0.2, color = "black"
+    ) +
+    labs(
+      title = paste(dataset_name),
+      x = NULL,
+      y = "% of cells",
+      color = "Treatment"   # Legend for point color
+    ) +
+    # Add pairwise significance annotations
+    stat_pvalue_manual(
+      significance_labels, 
+      label = "significance",  # Use the `significance` column for labels
+      tip.length = 0.02,       # Short brackets
+      bracket.size = 0.8,
+      vjust = 0
+    ) +
+    theme_minimal() +
+    theme(
+      text = element_text(family = "Arial", size = 12),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = NULL,
+      panel.grid.major = element_blank(),  # Remove major grid lines
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(color = "black")  # Add axis lines
+    ) +
+    scale_fill_viridis(option = "plasma", discrete = TRUE) +   # Use magma palette for bar fill
+    scale_color_viridis(option = "plasma", discrete = TRUE, alpha = 1) +
+    scale_shape_manual(values = shape_list)  # Apply manual shape mapping
+  
+  # Print the plot
+  print(p)
+dev.off()
+  # Store the pairwise results in the list
+ # all_pairwise_results[[dataset_name]] <- pairwise_results
+}
+
+# Combine all pairwise results into a single dataframe
+#combined_pairwise_results <- bind_rows(all_pairwise_results, .id = "dataset_name")
+
+# View the combined results
+#print(combined_pairwise_results)
+```
+
+#Linear regression PHA data
+```{r}
+
+output_dir <- "../Dec 12 2024 (new) PFOS/plots_output/Linear_regression"
+dir.create(output_dir, showWarnings = FALSE)
+
+clean_and_reshape_dataset <- function(dataset) {
+  dataset %>%
+    mutate(
+      Treatment = gsub("[^0-9.]", "", as.character(Treatment)),  # Remove non-numeric characters
+      Treatment = ifelse(Treatment == "", "0", Treatment),      # Replace empty strings with "0"
+      Treatment = as.numeric(Treatment)                         # Convert to numeric
+    ) %>%
+    pivot_longer(
+      cols = -c(Group, Treatment, Sex, Smokers),
+      names_to = "variable",
+      values_to = "Statistic"
+    )
+}
+
+# Clean and reshape PHA and LPS datasets
+pha_rescaled_datasets <- map(pha_datasets, clean_and_reshape_dataset)
+lps_rescaled_datasets <- map(lps_datasets, clean_and_reshape_dataset)
+
+fit_dose_response_model <- function(dataset) {
+  model <- lm(Statistic ~ Treatment, data = dataset)
+  
+  # Get model summary and calculate confidence intervals
+  coef_summary <- summary(model)$coefficients
+  conf_int <- confint(model)  # 95% confidence intervals
+  
+  # Calculate R-squared and Adjusted R-squared
+  r_squared <- summary(model)$r.squared
+  adj_r_squared <- summary(model)$adj.r.squared
+  
+  # Return all necessary components
+  return(list(model = model, coef_summary = coef_summary, conf_int = conf_int, 
+              r_squared = r_squared, adj_r_squared = adj_r_squared))
+}
+
+
+# Update the plotting function
+# Update the plotting function
+plot_dose_response <- function(dataset, model_results, dataset_name) {
+  # Extract model results
+  model <- model_results$model
+  coef_summary <- model_results$coef_summary
+  conf_int <- model_results$conf_int
+  r_squared <- model_results$r_squared
+  adj_r_squared <- model_results$adj_r_squared
+  
+  # Set file path for the plot
+  plot_file <- paste0(output_dir, dataset_name, "_linear_regression.png")
+  png(plot_file, width = 2200, height = 1600, res = 300)
+  
+  # Create the plot
+  p <- ggplot(dataset, aes(x = Treatment, y = Statistic, color = Group)) +
+    geom_point(size = 3, alpha = 0.7) +   # Add points
+    geom_smooth(method = "lm", aes(group = 1), se = TRUE, color = "black") +  # Add regression line with CI (se = TRUE)
+    labs(title = paste("Dose-Response Relationship:", dataset_name), 
+         x = "Treatment", y = "Statistic") +
+    theme_minimal() +
+    theme(
+      text = element_text(family = "Arial", size = 12),
+      axis.text.x = element_text(hjust = 1),
+      legend.position = NULL,
+      panel.grid.major = element_blank(),  # Remove major grid lines
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(color = "black")  # Add axis lines
+    ) +
+    scale_fill_viridis(option = "plasma", discrete = TRUE) +   # Use magma palette for bar fill
+    scale_color_viridis(option = "plasma", discrete = TRUE, alpha = 1)  # Apply manual shape mapping
+  
+  # Add model summary as text
+  p <- p + 
+    annotate("text", 
+             x = max(dataset$Treatment) * .15,  # Slightly beyond the maximum Treatment value
+             y = max(dataset$Statistic) * 1.30,  # Slightly beyond the maximum Statistic value
+             label = paste("\nSlope (Treatment):", format(coef_summary[2, 1], digits = 5, nsmall = 4),
+                           "\np-value (Treatment):", format(coef_summary[2, 4], digits = 5, nsmall = 4),
+                           "\nR²:", format(r_squared, digits = 5, nsmall = 4),
+                           "\nAdj R²:", format(adj_r_squared, digits = 5, nsmall = 4))) +
+    ylim(0, max(dataset$Statistic) * 1.40)  # Extend the y-axis to 40% above the highest Statistic
+  
+  # Print the plot
+  print(p)
+  
+  # Close the graphics device
+  dev.off()
+}
+
+```
+
+#Linear regression LPS data
+```{r}
+fit_dose_response_model <- function(dataset) {
+  model <- lm(Statistic ~ Treatment, data = dataset)
+  
+  # Get model summary and calculate confidence intervals
+  coef_summary <- summary(model)$coefficients
+  conf_int <- confint(model)  # 95% confidence intervals
+  
+  # Calculate R-squared and Adjusted R-squared
+  r_squared <- summary(model)$r.squared
+  adj_r_squared <- summary(model)$adj.r.squared
+  
+  # Return all necessary components
+  return(list(model = model, coef_summary = coef_summary, conf_int = conf_int, 
+              r_squared = r_squared, adj_r_squared = adj_r_squared))
+}
+
+
+# Update the plotting function
+plot_dose_response <- function(dataset, model_results, dataset_name) {
+  # Extract model results
+  model <- model_results$model
+  coef_summary <- model_results$coef_summary
+  conf_int <- model_results$conf_int
+  r_squared <- model_results$r_squared
+  adj_r_squared <- model_results$adj_r_squared
+  
+  # Set file path for the plot
+  plot_file <- paste0(output_dir, dataset_name, "_linear_regression.png")
+  png(plot_file, width = 2200, height = 1600, res = 300)
+  
+  # Create the plot
+  p <- ggplot(dataset, aes(x = Treatment, y = Statistic, color = Group)) +
+    geom_point(size = 3, alpha = 0.7) +   # Add points
+    geom_smooth(method = "lm", aes(group = 1), se = TRUE, color = "black") +  # Add regression line with CI (se = TRUE)
+    labs(title = paste("Dose-Response Relationship:", dataset_name), 
+         x = "Treatment", y = "Statistic") +
+    theme_minimal() +
+    theme(
+      text = element_text(family = "Arial", size = 12),
+      axis.text.x = element_text(hjust = 1),
+      legend.position = NULL,
+      panel.grid.major = element_blank(),  # Remove major grid lines
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(color = "black")  # Add axis lines
+    ) +
+    scale_fill_viridis(option = "plasma", discrete = TRUE) +   # Use magma palette for bar fill
+    scale_color_viridis(option = "plasma", discrete = TRUE, alpha = 1)  # Apply manual shape mapping
+  
+  # Add model summary as text
+  p <- p + 
+    annotate("text", 
+             x = max(dataset$Treatment) * .15,  # Slightly beyond the maximum Treatment value
+             y = max(dataset$Statistic) * 1.30,  # Slightly beyond the maximum Statistic value
+             label = paste("\nSlope (Treatment):", format(coef_summary[2, 1], digits = 5, nsmall = 4),
+                           "\np-value (Treatment):", format(coef_summary[2, 4], digits = 5, nsmall = 4),
+                           "\nR²:", format(r_squared, digits = 5, nsmall = 4),
+                           "\nAdj R²:", format(adj_r_squared, digits = 5, nsmall = 4))) +
+    ylim(0, max(dataset$Statistic) * 1.40)  # Extend the y-axis to 40% above the highest Statistic
+  
+  # Print the plot
+  print(p)
+  
+  # Close the graphics device
+  dev.off()
+}
+
+```
+
+#tclpfit2
+```{r}
+library(tcplfit2)
+library(gridExtra)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+# Function to process each dataset and print output
+process_and_plot_dataset <- function(dataset_name, dataset) {
+  # Step 1: Clean and reshape the dataset
+  clean_and_reshape_dataset <- dataset %>%
+    mutate(
+      Treatment = gsub("[^0-9.]", "", as.character(Treatment)),  # Remove non-numeric characters
+      Treatment = ifelse(Treatment == "", "0", Treatment),       # Replace empty strings with "0"
+      Treatment = as.numeric(Treatment)                          # Convert to numeric
+    )
+
+  # Step 2: Filter for test chemical and vehicle control
+  test_chem <- clean_and_reshape_dataset %>%
+    filter(Treatment > 0, !is.na(Statistic))  # Only keep positive Treatment values
+
+  vehicle_ctrl <- clean_and_reshape_dataset %>%
+    filter(Treatment == 0) %>%
+    summarise(Median = median(Statistic, na.rm = TRUE), 
+              nMad = mad(Statistic, na.rm = TRUE))
+
+  # Skip if there's no valid vehicle control or test chemical data
+  if (nrow(test_chem) < 3 || nrow(vehicle_ctrl) == 0) {
+    message(paste("Skipping dataset", dataset_name, "- insufficient data or variability"))
+    return(NULL)
+  }
+
+  # Step 3: Create the row input for concRespCore
+  row <- list(conc = as.numeric(test_chem$Treatment),
+              resp = test_chem$Statistic,
+              bmed = vehicle_ctrl$Median,
+              cutoff = vehicle_ctrl$nMad,
+              onesd = vehicle_ctrl$nMad,
+              assay = dataset_name)
+
+  # Check if bmed or cutoff is zero or NA
+  if (is.na(row$bmed) || row$bmed == 0 || is.na(row$cutoff) || row$cutoff == 0) {
+    message(paste("Skipping dataset", dataset_name, "- invalid baseline or cutoff values"))
+    return(NULL)
+  }
+
+  # Step 4: Run concentration-response modeling with error handling
+  out <- tryCatch({
+    concRespCore(row, conthits = FALSE)
+  }, error = function(e) {
+    message(paste("Error in concRespCore for dataset", dataset_name, ":", e$message))
+    return(NULL)
+  })
+
+  # Check if out is NULL or empty
+  if (is.null(out) || nrow(out) == 0 || !is.finite(out$bmd) || out$bmd <= 0) {
+    message(paste("Skipping dataset", dataset_name, "- no valid dose-response output"))
+    return(NULL)
+  }
+
+  # Print the valid output for inspection
+  message(paste("Valid output for dataset:", dataset_name))
+  print(out)
+
+  # Step 5: Generate plots if out is valid
+  tryCatch({
+    output <- tcplfit2_core(as.numeric(test_chem$Treatment), test_chem$Statistic, vehicle_ctrl$nMad)
+    basic_plot <- plot_allcurves(output, test_chem$Treatment, test_chem$Statistic)
+    basic_log <- plot_allcurves(output, test_chem$Treatment, test_chem$Statistic, log_conc = TRUE)
+
+    res <- concRespCore(row,
+                        fitmodels = c("cnst", "hill", "gnls", 
+                                      "poly1", "poly2", "pow", 
+                                      "exp2", "exp3", "exp4", "exp5"),
+                        conthits = TRUE)
+
+    final_plot <- concRespPlot2(res, log_conc = FALSE) + ggtitle(paste0(dataset_name, " Response"))
+
+    # Add potency estimate points to the plot if available
+    estimate_points <- out %>%
+      select(bmd, ac50, ac5) %>%
+      tidyr::pivot_longer(everything(), names_to = "Potency Estimates") %>%
+      mutate(`Potency Estimates` = toupper(`Potency Estimates`))
+
+    y <- c(out[, "bmr"], out[, "cutoff"], out[, "top"] * 3)
+    estimate_points <- cbind(estimate_points, y = y)
+
+    if (nrow(estimate_points) > 0) {
+      final_plot <- final_plot + geom_point(
+        data = estimate_points,
+        aes(x = value, y = y, fill = `Potency Estimates`),
+        shape = 21, cex = 2.5
+      )
+    }
+
+    # Additional plot with concRespPlot
+    custom_plot <- concRespPlot(
+      dataset = res, 
+      ymin = min(test_chem$Statistic) - 5, 
+      ymax = max(test_chem$Statistic) + 10, 
+      draw.error.arrows = FALSE
+    )
+
+    # Display the plots
+    grid.arrange(basic_plot, basic_log, final_plot, custom_plot)
+  }, error = function(e) {
+    message("Error in plot generation: ", e$message)
+  })
+
+  # Generate tcpl_results for individual features
+  tcpl_results <- lapply(unique(test_chem$feat), function(y) {
+    chem_data <- test_chem %>%
+      filter(feat == y)
+    tcpl_chem <- concRespCore(list(
+      conc = chem_data$Treatment,
+      resp = chem_data$Statistic,
+      bmed = vehicle_ctrl$Median,
+      cutoff = vehicle_ctrl$nMad,
+      assay = dataset_name
+    ))
+
+    # Individual feature concentration-response curves
+    concRespPlot(tcpl_chem, ymin = min(chem_data$Statistic) - 5, ymax = max(chem_data$Statistic) + 10, draw.error.arrows = FALSE)
+
+    return(tcpl_chem)
+  })
+
+  # Generate and print BMC plot
+  bmc_data <- do.call(rbind, lapply(tcpl_results, function(x) {
+    data.frame(
+      bmd = bmd,
+      bmdl = bmdl,
+      bmdu = bmdu,
+      feat = feat,
+    )
+  }))
+grid.arrange(basic_plot, basic_log, final_plot)
+  return(do.call(rbind, tcpl_results))
+}
+
+# Loop over all datasets in the list and store valid plots
+output_plots <- lapply(names(datasets), function(dataset_name) {
+  process_and_plot_dataset(dataset_name, datasets[[dataset_name]])
+})
+
+```
+
+#httk
+```{r}
+library(httk)
+load("/Users/aloan/OneDrive - HC-SC PHAC-ASPC/Desktop/PFAS immunotox/invitrodb_3_5_mc5.Rdata")
+toxcast.httk <- subset(mc5, dsstox_substance_id %in% get_cheminfo(
+         info="DTXSID",
+         suppress.messages=TRUE))
+set.seed(1234)
+my.chems <- mc5$dsstox_substance_id[mc5$dsstox_substance_id == "DTXSID1020350"]
+
+example.toxcast <- as.data.frame(mc5[mc5$dsstox_substance_id == "DTXSID1020350"])
+knitr::kable(head(example.toxcast), caption = "ToxCast In Vitro Bioactivity Data",
+             floating.environment="sidewaystable")
+
+toxcast.table <- NULL
+for (this.id in unique(example.toxcast$dsstox_substance_id))
+{
+  this.subset <- subset(example.toxcast, dsstox_substance_id == this.id)
+  these.hits <- subset(this.subset, hitc==1)
+  if (dim(these.hits)[1]>0){
+      this.row <- data.frame(Compound=as.character(this.subset[1,"chnm"]),
+                         DTXSID=this.id,
+                         Total.Assays = dim(this.subset)[1],
+                         Unique.Assays = length(unique(this.subset$aeid)),
+                         Total.Hits = dim(these.hits)[1],
+                         Unique.Hits = length(unique(these.hits$aeid)),
+                         Low.AC50 = signif(min(these.hits$modl_ga),3),
+                         Low.AC10 = signif(min(these.hits$modl_ac10),3),
+                         Low.ACC = signif(min(these.hits$modl_acc),3),
+                         Q10.AC50 = signif(quantile(these.hits$modl_ga,probs=0.1),3),
+                         Q10.AC10 = signif(quantile(these.hits$modl_ac10,probs=0.1),3),
+                         Q10.ACC = signif(quantile(these.hits$modl_acc,probs=0.1),3),
+                         Med.AC50 = signif(median(these.hits$modl_ga),3),
+                         Med.AC10 = signif(median(these.hits$modl_ac10),3),
+                         Med.ACC = signif(median(these.hits$modl_acc),3),
+                         Q90.AC50 = signif(quantile(these.hits$modl_ga,probs=0.9),3),
+                         Q90.AC10 = signif(quantile(these.hits$modl_ac10,probs=0.9),3),
+                         Q90.ACC = signif(quantile(these.hits$modl_acc,probs=0.9),3)
+                         )
+    toxcast.table <- rbind(toxcast.table, this.row)
+  }
+}
+rownames(toxcast.table) <- seq(1,dim(toxcast.table)[1])
+knitr::kable(head(toxcast.table[,1:6]), caption = "Summarized ToxCast Data",
+             floating.environment="sidewaystable")
+```
+```{r}
+# Create new data frame with PFOS and PFOA information
+my.new.data <- as.data.frame(c("PFOS", "PFOA"), stringsAsFactors=FALSE)
+my.new.data <- cbind(my.new.data, as.data.frame(c("1763-23-1", "335-67-1"), stringsAsFactors=FALSE))  # CASRN for PFOS and PFOA
+my.new.data <- cbind(my.new.data, as.data.frame(c("DTXSID8031865", "DTXSID8031870"), stringsAsFactors=FALSE))  # DTXSID for PFOS and PFOA
+my.new.data <- cbind(my.new.data, as.data.frame(c(500.13, 414.07)))  # Molecular weight for PFOS and PFOA
+my.new.data <- cbind(my.new.data, as.data.frame(c(5.3, 4.3)))  # LogP for PFOS and PFOA
+my.new.data <- cbind(my.new.data, as.data.frame(c(0.9, 0.9)))  # Fup for PFOS and PFOA
+my.new.data <- cbind(my.new.data, as.data.frame(c(0.01, 0.02)))  # CLint for PFOS and PFOA
+
+# Name the columns
+colnames(my.new.data) <- c("Name", "CASRN", "DTXSID", "MW", "LogP", "Fup", "CLint")
+
+# Add the data to a chemical table
+chem.physical_and_invitro.data <- add_chemtable(my.new.data,
+                                  current.table=chem.physical_and_invitro.data,
+                                  data.list=list(
+                                      Compound="Name",
+                                      CAS="CASRN",
+                                      DTXSID="DTXSID",
+                                      MW="MW",
+                                      logP="LogP",
+                                      Funbound.plasma="Fup",
+                                      Clint="CLint"),
+                                  species="Human",
+                                  reference="MyPaper 2015")
+
+# Parameterize steady state for PFOS and PFOA
+parameterize_steadystate(chem.name="Perfluorooctanesulfonic acid")
+parameterize_steadystate(chem.name="PFOA")
+
+# Calculate Css for PFOS and PFOA
+calc_css(chem.name="PFOS")
+calc_css(chem.name="PFOA")
+
+# Initialize a column for proton donors (acids)
+my.new.data$pka.a <- NA
+# Set PFOS as an acid (pKa_donor = 5)
+my.new.data[my.new.data$Name=="PFOS", "pka.a"] <- "5"
+# Set PFOA as an acid (pKa_donor = 5)
+my.new.data[my.new.data$Name=="PFOA", "pka.a"] <- "5"
+
+# Add acid data to the table
+chem.physical_and_invitro.data <- add_chemtable(my.new.data,
+                                  current.table=chem.physical_and_invitro.data,
+                                  data.list=list(
+                                      Compound="Name",
+                                      CAS="CASRN",
+                                      DTXSID="DTXSID",
+                                      pKa_Donor="pka.a"),
+                                  species="Human",
+                                  reference="MyPaper 2015")
+
+# Parameterize steady state again for PFOS and PFOA
+parameterize_steadystate(chem.name="PFOS")
+parameterize_steadystate(chem.name="PFOA")
+
+# Initialize a column for proton acceptors (bases)
+my.new.data$pka.b <- NA
+# Set PFOS and PFOA as bases with multiple pKa's (if necessary)
+# (Not setting any pKa values for bases here, as these are acids)
+my.new.data[my.new.data$Name=="PFOS", "pka.b"] <- NA
+my.new.data[my.new.data$Name=="PFOA", "pka.b"] <- NA
+
+# Add base data to the table (no base data for PFOS and PFOA here)
+chem.physical_and_invitro.data <- add_chemtable(my.new.data,
+                                  current.table=chem.physical_and_invitro.data,
+                                  data.list=list(
+                                      Compound="Name",
+                                      CAS="CASRN",
+                                      DTXSID="DTXSID",
+                                      pKa_Accept="pka.b"),
+                                  species="Human",
+                                  reference="MyPaper 2015")
+
+# Calculate Css for PFOS and PFOA after adding pKa values
+calc_css(chem.name="PFOS")
+calc_css(chem.name="PFOA")
+
+```
